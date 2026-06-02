@@ -9,3 +9,4 @@ opencv-python-headless
 numpy
 rembg
 onnxruntime
+nest_asyncio
