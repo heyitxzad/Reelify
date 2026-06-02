@@ -132,7 +132,7 @@ def draw_smart_text(image_path, text, styling):
         draw.rectangle([(0, y_pos - 10), (target_w, y_pos + text_h + padding*2)], fill=(0, 0, 0, 160))
         draw.multiline_text((center_x, y_pos + padding - 10), wrapped_text, font=font, fill=font_color, anchor="ma", align="center")
         
-    return img_final
+    return canvas # FIXED HERE!
 
 # Stable High-Res Aesthetic Stock Images of Models
 MODEL_PHOTOS_URLS = {
