@@ -198,9 +198,9 @@ if st.button("🚀 Generate Pro Ad Video"):
                     base_video = VideoFileClip(raw_video_path)
                     if base_video.duration < target_duration:
                         loops = int(np.ceil(target_duration / base_video.duration))
-                        base_video = concatenate_videoclips([base_video] * loops).subclip(0, target_duration)
+                        base_video = concatenate_videoclips([base_video] * loops).subclipped(0, target_duration)
                     else:
-                        base_video = base_video.subclip(0, target_duration)
+                        base_video = base_video.subclipped(0, target_duration)
                 else:
                     base_video = ColorClip(size=(720, 1280), color=(30, 30, 30), duration=target_duration)
 
@@ -213,9 +213,8 @@ if st.button("🚀 Generate Pro Ad Video"):
                     start_t = i * scene_duration
                     end_t = (i + 1) * scene_duration if i < len(subtitles) - 1 else target_duration
                     
-                    subclip = base_video.subclip(start_t, end_t)
+                    subclip = base_video.subclipped(start_t, end_t)
                     
-                    # Safe frame transformation compatible with all MoviePy versions
                     try:
                         textured_clip = subclip.image_transform(lambda frame, text=sub_text: add_overlays_to_frame(frame, text, sticker_img))
                     except AttributeError:
