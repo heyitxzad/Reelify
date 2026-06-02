@@ -5,6 +5,7 @@ import urllib.request
 import numpy as np
 import traceback
 import asyncio
+import time
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
@@ -15,7 +16,7 @@ from gradio_client import Client
 from rembg import remove
 
 # ----------------------------------------------------------
-# 1. PYDANTIC GUARDRAILS (Forces AI to never make mistakes)
+# 1. PYDANTIC GUARDRAILS
 # ----------------------------------------------------------
 class AdPackage(BaseModel):
     subtitle_1: str
@@ -27,7 +28,7 @@ class AdPackage(BaseModel):
     hashtags: str
 
 # ----------------------------------------------------------
-# 2. STREAMLIT APP LAYOUT (Reelify Pro)
+# 2. STREAMLIT APP LAYOUT
 # ----------------------------------------------------------
 st.set_page_config(page_title="Reelify Pro", page_icon="🎬", layout="centered")
 
@@ -70,28 +71,22 @@ def get_custom_font(font_size=60):
             return ImageFont.load_default()
     return ImageFont.truetype(font_path, font_size)
 
-# The new compositing engine: Adds product sticker + Subtitles to video frames
 def add_overlays_to_frame(frame, text, sticker_img=None):
-    # Convert moviepy frame to PIL Image
     img = Image.fromarray(frame).convert("RGBA")
     target_w, target_h = img.size
     
-    # 1. Add Product Sticker (If uploaded and processed by rembg)
     if sticker_img:
-        # Resize sticker to take up about 45% of screen width
         sticker_w = int(target_w * 0.45)
         sticker_h = int(sticker_img.height * (sticker_w / sticker_img.width))
         sticker_resized = sticker_img.resize((sticker_w, sticker_h), Image.Resampling.LANCZOS)
         
-        # Place it slightly above the center
         paste_x = (target_w - sticker_w) // 2
         paste_y = int(target_h * 0.25)
         img.paste(sticker_resized, (paste_x, paste_y), sticker_resized)
 
-    # 2. Add TikTok Style Subtitles
     draw = ImageDraw.Draw(img, "RGBA")
     font = get_custom_font(65)
-    font_color = (255, 223, 0, 255) # Yellow
+    font_color = (255, 223, 0, 255) 
 
     words = text.split()
     lines, current_line = [], []
@@ -109,10 +104,7 @@ def add_overlays_to_frame(frame, text, sticker_img=None):
     center_x = target_w // 2
     y_pos = int(target_h * 0.70)
 
-    # Thick black stroke for visibility
     draw.multiline_text((center_x, y_pos), wrapped_text, font=font, fill=font_color, stroke_width=8, stroke_fill=(0, 0, 0, 255), anchor="ma", align="center")
-        
-    # Convert back to RGB array for MoviePy
     return np.array(img.convert("RGB"))
 
 async def generate_neural_voiceover(text, region, gender, output_path="temp_voiceover.mp3"):
@@ -140,7 +132,6 @@ def generate_huggingface_video(ai_video_prompt):
         return result
     except Exception as e:
         st.warning("HF Server busy. Generating beautiful aesthetic fallback video instead.")
-        # Fallback if public server is full
         return None
 
 # ----------------------------------------------------------
@@ -155,66 +146,74 @@ if st.button("🚀 Generate Pro Ad Video"):
                 temp_dir = "temp_assets"
                 os.makedirs(temp_dir, exist_ok=True)
                 
-                # 1. REMBG Magic - Process Uploaded Product
                 sticker_img = None
                 if uploaded_file:
                     st.info("✨ AI is removing the background from your product photo...")
                     input_path = os.path.join(temp_dir, uploaded_file.name)
                     with open(input_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
-                    
-                    # Remove background!
                     raw_img = Image.open(input_path)
                     sticker_img = remove(raw_img)
 
-                # 2. Pydantic + Gemini AI: Structured Prompting
                 st.info("🧠 AI is writing script and video generation blueprint...")
                 client = genai.Client(api_key=gemini_key)
                 prompt = f"Create a viral commercial ad package for '{product_input}'. User vibe: '{user_prompt}'. Max 30 words for voiceover. For the ai_video_prompt, describe a 4k vertical shot of a model."
                 
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=AdPackage, # THIS is Pydantic keeping the AI perfectly structured!
-                    ),
-                )
-                pkg = json.loads(response.text)
+                # --- NEW AUTO-RETRY LOGIC FOR GOOGLE 503 ERRORS ---
+                max_retries = 3
+                pkg = None
+                for attempt in range(max_retries):
+                    try:
+                        response = client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                response_schema=AdPackage,
+                            ),
+                        )
+                        pkg = json.loads(response.text)
+                        break # Success! Break out of the loop.
+                    except Exception as e:
+                        if "503" in str(e) or "UNAVAILABLE" in str(e):
+                            if attempt < max_retries - 1:
+                                st.warning(f"Google servers are busy. Retrying in 5 seconds... (Attempt {attempt+1}/{max_retries})")
+                                time.sleep(5)
+                            else:
+                                st.error("Google Gemini is overloaded right now. Please try again in 1 minute!")
+                                st.stop()
+                        else:
+                            raise e # If it's a different error, crash normally
+                # ---------------------------------------------------
+
                 subtitles = [pkg["subtitle_1"], pkg["subtitle_2"], pkg["subtitle_3"]]
 
-                # 3. Generate Voice
                 st.info("🎙️ Generating Neural Voiceover...")
                 voice_path = "temp_voiceover.mp3"
                 asyncio.run(generate_neural_voiceover(pkg["voiceover_text"], voice_region, voice_gender, voice_path))
                 voice_clip = AudioFileClip(voice_path)
                 target_duration = voice_clip.duration
 
-                # 4. Fetch AI Video from Hugging Face
                 raw_video_path = generate_huggingface_video(pkg["ai_video_prompt"])
                 
                 if raw_video_path and os.path.exists(raw_video_path):
                     base_video = VideoFileClip(raw_video_path)
-                    # Loop AI video to match voice length
                     if base_video.duration < target_duration:
                         loops = int(np.ceil(target_duration / base_video.duration))
                         base_video = concatenate_videoclips([base_video] * loops).subclip(0, target_duration)
                     else:
                         base_video = base_video.subclip(0, target_duration)
                 else:
-                    # Aesthetic gradient fallback if HF server is crowded
                     def gradient_frame(t):
-                        # Moving color gradient
                         color = int(255 * (t / target_duration))
                         frame = np.zeros((1280, 720, 3), dtype=np.uint8)
-                        frame[:, :, 0] = color # R
-                        frame[:, :, 1] = 50 # G
-                        frame[:, :, 2] = 255 - color # B
+                        frame[:, :, 0] = color
+                        frame[:, :, 1] = 50
+                        frame[:, :, 2] = 255 - color
                         return frame
                     from moviepy import VideoClip
                     base_video = VideoClip(make_frame=gradient_frame, duration=target_duration)
 
-                # 5. Compile Video + Sticker + Subtitles Frame-by-Frame
                 st.info("🎬 Compositing Video, Product Sticker, and Subtitles...")
                 scene_duration = target_duration / len(subtitles)
                 clips = []
@@ -225,8 +224,6 @@ if st.button("🚀 Generate Pro Ad Video"):
                     end_t = (i + 1) * scene_duration if i < len(subtitles) - 1 else target_duration
                     
                     subclip = base_video.subclip(start_t, end_t)
-                    
-                    # Apply function to every frame: adds Sticker and Text
                     textured_clip = subclip.fl(lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img))
                     clips.append(textured_clip)
 
@@ -241,9 +238,6 @@ if st.button("🚀 Generate Pro Ad Video"):
                 final_clip.close()
                 base_video.close()
 
-                # ----------------------------------------------------------
-                # 6. DISPLAY RESULTS
-                # ----------------------------------------------------------
                 st.success("🎉 Final Ad Completed!")
                 st.video(output_path)
                 with open(output_path, "rb") as file:
