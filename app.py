@@ -216,8 +216,8 @@ if st.button("🚀 Generate Pro Ad Video"):
                     start_t = i * scene_duration
                     end_t = (i + 1) * scene_duration if i < len(subtitles) - 1 else target_duration
                     
-                    subclip = base_video.subclip(start_t, end_t)
-                    textured_clip = subclip.fl(lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img))
+                    subclipped = base_video.subclipped(start_t, end_t)
+                    textured_clip = subclipped.fl(lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img))
                     clips.append(textured_clip)
 
                 final_clip = concatenate_videoclips(clips)
