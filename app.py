@@ -9,8 +9,7 @@ import time
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
-from google import genai
-from google.genai import types
+from groq import Groq
 from moviepy import VideoFileClip, concatenate_videoclips, AudioFileClip, ColorClip
 from gradio_client import Client
 from rembg import remove
@@ -45,7 +44,8 @@ st.markdown(
 )
 
 st.sidebar.header("🔑 App Settings")
-gemini_key = st.sidebar.text_input("Enter GEMINI_API_KEY", type="password")
+groq_key = st.sidebar.text_input("Enter GROQ_API_KEY", type="password")
+st.sidebar.markdown("[🆓 Get Free Groq API Key](https://console.groq.com)", unsafe_allow_html=True)
 
 st.subheader("📦 Step 1: Product & Vision")
 product_input = st.text_input("Product Name", placeholder="e.g. Good Molecules Azelaic Acid Cleanser")
@@ -108,7 +108,6 @@ def add_overlays_to_frame(frame, text, sticker_img=None):
                         stroke_width=8, stroke_fill=(0, 0, 0, 255), anchor="ma", align="center")
     return np.array(img.convert("RGB"))
 
-# FIX 2: Use a sync wrapper to avoid asyncio.run() conflicts inside Streamlit
 def run_voiceover(text, region, gender, output_path="temp_voiceover.mp3"):
     async def _inner():
         voice_map = {
@@ -124,7 +123,7 @@ def run_voiceover(text, region, gender, output_path="temp_voiceover.mp3"):
         voice_actor = voice_map.get(f"{region}_{gender}", "en-US-EmmaMultilingualNeural")
         communicate = edge_tts.Communicate(text, voice_actor)
         await communicate.save(output_path)
-    # Safe cross-platform async runner
+
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -150,18 +149,65 @@ def generate_huggingface_video(ai_video_prompt):
         st.warning("HF Server busy. Generating fallback layout instead.")
         return None
 
+def call_groq(groq_key, prompt):
+    """Call Groq API with retry logic and return parsed AdPackage dict."""
+    client = Groq(api_key=groq_key)
+
+    system_prompt = """You are an expert viral ad copywriter. 
+Always respond with ONLY a valid JSON object — no markdown, no explanation, no extra text.
+The JSON must have exactly these keys:
+subtitle_1, subtitle_2, subtitle_3, voiceover_text, ai_video_prompt, captions, hashtags"""
+
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.7,
+            )
+            raw = response.choices[0].message.content
+            # Strip any accidental markdown fences
+            clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            pkg = json.loads(clean)
+            # Validate all required keys are present
+            required = ["subtitle_1","subtitle_2","subtitle_3",
+                        "voiceover_text","ai_video_prompt","captions","hashtags"]
+            for key in required:
+                if key not in pkg:
+                    pkg[key] = ""
+            return pkg
+        except json.JSONDecodeError:
+            if attempt == 2:
+                raise Exception("Groq returned invalid JSON after 3 attempts. Please try again.")
+            time.sleep(2)
+        except Exception as e:
+            err = str(e)
+            if "rate_limit" in err.lower() or "429" in err:
+                if attempt < 2:
+                    st.warning(f"Rate limit hit, retrying in 10s... (attempt {attempt+1}/3)")
+                    time.sleep(10)
+                else:
+                    raise Exception("Groq rate limit exceeded. Wait a minute and try again.")
+            else:
+                raise e
+
 # ----------------------------------------------------------
 # 4. EXECUTION ACTION
 # ----------------------------------------------------------
 if st.button("🚀 Generate Pro Ad Video"):
-    if not product_input or not gemini_key:
-        st.error("Please enter a valid GEMINI_API_KEY and Product Name!")
+    if not product_input or not groq_key:
+        st.error("Please enter your GROQ API Key and Product Name!")
     else:
         with st.spinner("AI Brain is orchestrating the ad..."):
             try:
                 temp_dir = "temp_assets"
                 os.makedirs(temp_dir, exist_ok=True)
 
+                # --- Background Removal ---
                 sticker_img = None
                 if uploaded_file:
                     st.info("✨ AI is removing the background from your product photo...")
@@ -171,48 +217,30 @@ if st.button("🚀 Generate Pro Ad Video"):
                     raw_img = Image.open(input_path)
                     sticker_img = remove(raw_img)
 
+                # --- Groq AI Script Generation ---
                 st.info("🧠 AI is writing script and video generation blueprint...")
-                client = genai.Client(api_key=gemini_key)
                 prompt = (
                     f"Create a viral commercial ad package for '{product_input}'. "
-                    f"User vibe: '{user_prompt}'. Max 30 words for voiceover. "
-                    f"For the ai_video_prompt, describe a 4k vertical shot of a model."
+                    f"User vibe: '{user_prompt}'. "
+                    f"Keep voiceover_text under 30 words, energetic and persuasive. "
+                    f"For ai_video_prompt describe a cinematic 4k vertical shot of a model. "
+                    f"Write captions as an engaging Instagram caption. "
+                    f"Write hashtags as 10 relevant trending hashtags."
                 )
-
-                pkg = None
-                for attempt in range(3):
-                    try:
-                        response = client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                response_schema=AdPackage,
-                            ),
-                        )
-                        pkg = json.loads(response.text)
-                        break
-                    except Exception as e:
-                        if "503" in str(e) or "UNAVAILABLE" in str(e):
-                            if attempt < 2:
-                                time.sleep(5)
-                            else:
-                                st.error("Google Gemini is overloaded. Please try again in 1 minute!")
-                                st.stop()
-                        else:
-                            raise e
+                pkg = call_groq(groq_key, prompt)
 
                 subtitles = [pkg["subtitle_1"], pkg["subtitle_2"], pkg["subtitle_3"]]
 
+                # --- Voiceover ---
                 st.info("🎙️ Generating Neural Voiceover...")
                 voice_path = "temp_voiceover.mp3"
                 run_voiceover(pkg["voiceover_text"], voice_region, voice_gender, voice_path)
                 voice_clip = AudioFileClip(voice_path)
                 target_duration = voice_clip.duration
 
+                # --- Video Generation ---
                 raw_video_path = generate_huggingface_video(pkg["ai_video_prompt"])
 
-                # FIX 1: Use .subclipped() everywhere — MoviePy 2.x renamed .subclip() to .subclipped()
                 if raw_video_path and os.path.exists(raw_video_path):
                     base_video = VideoFileClip(raw_video_path)
                     if base_video.duration < target_duration:
@@ -221,8 +249,9 @@ if st.button("🚀 Generate Pro Ad Video"):
                     else:
                         base_video = base_video.subclipped(0, target_duration)
                 else:
-                    base_video = ColorClip(size=(720, 1280), color=(30, 30, 30), duration=target_duration)
+                    base_video = ColorClip(size=(720, 1280), color=(20, 20, 20), duration=target_duration)
 
+                # --- Compositing ---
                 st.info("🎬 Compositing Video, Product Sticker, and Subtitles...")
                 scene_duration = target_duration / len(subtitles)
                 clips = []
@@ -230,8 +259,6 @@ if st.button("🚀 Generate Pro Ad Video"):
                 for i, sub_text in enumerate(subtitles):
                     start_t = i * scene_duration
                     end_t = (i + 1) * scene_duration if i < len(subtitles) - 1 else target_duration
-
-                    # FIX 1 (continued): .subclipped() not .subclip()
                     scene_clip = base_video.subclipped(start_t, end_t)
 
                     try:
@@ -242,7 +269,6 @@ if st.button("🚀 Generate Pro Ad Video"):
                         textured_clip = scene_clip.fl_image(
                             lambda frame, text=sub_text: add_overlays_to_frame(frame, text, sticker_img)
                         )
-
                     clips.append(textured_clip)
 
                 final_clip = concatenate_videoclips(clips)
@@ -260,14 +286,16 @@ if st.button("🚀 Generate Pro Ad Video"):
                 except Exception:
                     pass
 
-                st.success("🎉 Final Ad Completed!")
+                # --- Output ---
+                st.success("🎉 Your Ad is Ready!")
                 st.video(output_path)
                 with open(output_path, "rb") as file:
-                    st.download_button("💾 Download Masterpiece", data=file,
+                    st.download_button("💾 Download Your Ad", data=file,
                                        file_name="reelify_pro_ad.mp4", mime="video/mp4")
 
+                st.markdown("### 📋 Caption & Hashtags")
                 st.code(f"{pkg['captions']}\n\n{pkg['hashtags']}")
 
             except Exception as e:
-                st.error("Assembly Error. Check logs for details.")
+                st.error("Something went wrong. See details below.")
                 st.text(traceback.format_exc())
