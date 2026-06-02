@@ -1,6 +1,14 @@
 streamlit
+gradio_client
 google-genai
+pydantic
 edge-tts
 moviepy
 pillow
+opencv-python-headless
 numpy
+rembg
+httpx
+python-dotenv
+librosa
+beautifulsoup4
