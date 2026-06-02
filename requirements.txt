@@ -8,7 +8,4 @@ pillow
 opencv-python-headless
 numpy
 rembg
-httpx
-python-dotenv
-librosa
-beautifulsoup4
+onnxruntime
