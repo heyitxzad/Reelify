@@ -71,6 +71,12 @@ def get_custom_font(font_size=60):
             return ImageFont.load_default()
     return ImageFont.truetype(font_path, font_size)
 
+def get_subclip(clip, start_t, end_t):
+    """Safely extracts a subclip supporting both MoviePy v1 and v2"""
+    if hasattr(clip, "subclipped"):
+        return clip.subclipped(start_t, end_t)
+    return clip.subclip(start_t, end_t)
+
 def add_overlays_to_frame(frame, text, sticker_img=None):
     img = Image.fromarray(frame).convert("RGBA")
     target_w, target_h = img.size
@@ -131,7 +137,7 @@ def generate_huggingface_video(ai_video_prompt):
         )
         return result
     except Exception as e:
-        st.warning("HF Server busy. Generating beautiful aesthetic fallback background instead.")
+        st.warning("HF Server busy. Generating fallback background instead.")
         return None
 
 # ----------------------------------------------------------
@@ -198,13 +204,12 @@ if st.button("🚀 Generate Pro Ad Video"):
                     base_video = VideoFileClip(raw_video_path)
                     if base_video.duration < target_duration:
                         loops = int(np.ceil(target_duration / base_video.duration))
-                        # FIXED: Changed .subclip to .subclipped
-                        base_video = concatenate_videoclips([base_video] * loops).subclipped(0, target_duration)
+                        base_video = concatenate_videoclips([base_video] * loops)
+                        base_video = get_subclip(base_video, 0, target_duration)
                     else:
-                        # FIXED: Changed .subclip to .subclipped
-                        base_video = base_video.subclipped(0, target_duration)
+                        base_video = get_subclip(base_video, 0, target_duration)
                 else:
-                    # Solid aesthetic dark background that is 100% compatible with MoviePy v2
+                    # Solid aesthetic dark background compatible with MoviePy v2
                     fallback_frame = np.zeros((1280, 720, 3), dtype=np.uint8)
                     fallback_frame[:, :] = [20, 20, 30] # Sleek dark navy
                     base_video = ImageClip(fallback_frame).with_duration(target_duration)
@@ -218,9 +223,8 @@ if st.button("🚀 Generate Pro Ad Video"):
                     start_t = i * scene_duration
                     end_t = (i + 1) * scene_duration if i < len(subtitles) - 1 else target_duration
                     
-                    # FIXED: Changed .subclip to .subclipped
-                    subclip = base_video.subclipped(start_t, end_t)
-                    textured_clip = subclip.fl(lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img))
+                    sub_clip_segment = get_subclip(base_video, start_t, end_t)
+                    textured_clip = sub_clip_segment.fl(lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img))
                     clips.append(textured_clip)
 
                 final_clip = concatenate_videoclips(clips)
@@ -244,4 +248,3 @@ if st.button("🚀 Generate Pro Ad Video"):
             except Exception as e:
                 st.error("Assembly Error.")
                 st.text(traceback.format_exc())
-}
