@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
-from moviepy import VideoFileClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip, ImageClip
+from moviepy import VideoFileClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip, ColorClip
 from gradio_client import Client
 from rembg import remove
 
@@ -71,12 +71,6 @@ def get_custom_font(font_size=60):
             return ImageFont.load_default()
     return ImageFont.truetype(font_path, font_size)
 
-def get_subclip(clip, start_t, end_t):
-    """Safely extracts a subclip supporting both MoviePy v1 and v2"""
-    if hasattr(clip, "subclipped"):
-        return clip.subclipped(start_t, end_t)
-    return clip.subclip(start_t, end_t)
-
 def add_overlays_to_frame(frame, text, sticker_img=None):
     img = Image.fromarray(frame).convert("RGBA")
     target_w, target_h = img.size
@@ -122,6 +116,7 @@ async def generate_neural_voiceover(text, region, gender, output_path="temp_voic
         "India_Female": "en-IN-NeerjaNeural",
         "India_Male": "en-IN-PrabhatNeural",
         "Australia_Female": "en-AU-NatashaNeural",
+        "Australia_Male": "en-AU-WilliamNeural"
     }
     voice_actor = voice_map.get(f"{region}_{gender}", "en-US-EmmaMultilingualNeural")
     communicate = edge_tts.Communicate(text, voice_actor)
@@ -137,7 +132,7 @@ def generate_huggingface_video(ai_video_prompt):
         )
         return result
     except Exception as e:
-        st.warning("HF Server busy. Generating fallback background instead.")
+        st.warning("HF Server busy. Generating fallback layout instead.")
         return None
 
 # ----------------------------------------------------------
@@ -182,10 +177,9 @@ if st.button("🚀 Generate Pro Ad Video"):
                     except Exception as e:
                         if "503" in str(e) or "UNAVAILABLE" in str(e):
                             if attempt < max_retries - 1:
-                                st.warning(f"Google servers busy. Retrying... (Attempt {attempt+1}/{max_retries})")
                                 time.sleep(5)
                             else:
-                                st.error("Google Gemini is overloaded. Please try again in 1 minute!")
+                                st.error("Google Gemini is overloaded right now. Please try again in 1 minute!")
                                 st.stop()
                         else:
                             raise e
@@ -204,15 +198,11 @@ if st.button("🚀 Generate Pro Ad Video"):
                     base_video = VideoFileClip(raw_video_path)
                     if base_video.duration < target_duration:
                         loops = int(np.ceil(target_duration / base_video.duration))
-                        base_video = concatenate_videoclips([base_video] * loops)
-                        base_video = get_subclip(base_video, 0, target_duration)
+                        base_video = concatenate_videoclips([base_video] * loops).subclip(0, target_duration)
                     else:
-                        base_video = get_subclip(base_video, 0, target_duration)
+                        base_video = base_video.subclip(0, target_duration)
                 else:
-                    # Solid aesthetic dark background compatible with MoviePy v2
-                    fallback_frame = np.zeros((1280, 720, 3), dtype=np.uint8)
-                    fallback_frame[:, :] = [20, 20, 30] # Sleek dark navy
-                    base_video = ImageClip(fallback_frame).with_duration(target_duration)
+                    base_video = ColorClip(size=(720, 1280), color=(30, 30, 30), duration=target_duration)
 
                 st.info("🎬 Compositing Video, Product Sticker, and Subtitles...")
                 scene_duration = target_duration / len(subtitles)
@@ -223,19 +213,15 @@ if st.button("🚀 Generate Pro Ad Video"):
                     start_t = i * scene_duration
                     end_t = (i + 1) * scene_duration if i < len(subtitles) - 1 else target_duration
                     
-                    sub_clip_segment = get_subclip(base_video, start_t, end_t)
+                    subclip = base_video.subclip(start_t, end_t)
                     
-                    # Uses the helper to safely transform frames across both MoviePy versions
-                    textured_clip = apply_clip_transform(
-                        sub_clip_segment,
-                        lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img)
-                    )
+                    # Safe frame transformation compatible with all MoviePy versions
+                    try:
+                        textured_clip = subclip.image_transform(lambda frame, text=sub_text: add_overlays_to_frame(frame, text, sticker_img))
+                    except AttributeError:
+                        textured_clip = subclip.fl_image(lambda frame, text=sub_text: add_overlays_to_frame(frame, text, sticker_img))
+                    
                     clips.append(textured_clip)
-def apply_clip_transform(clip, func):
-    """Safely applies frame transformation supporting both MoviePy v1 (.fl) and v2 (.transform)"""
-    if hasattr(clip, "transform"):
-        return clip.transform(func)
-    return clip.fl(func)
 
                 final_clip = concatenate_videoclips(clips)
                 final_clip = final_clip.with_audio(voice_clip)
@@ -246,7 +232,10 @@ def apply_clip_transform(clip, func):
                 for c in clips: c.close()
                 voice_clip.close()
                 final_clip.close()
-                base_video.close()
+                try:
+                    base_video.close()
+                except:
+                    pass
 
                 st.success("🎉 Final Ad Completed!")
                 st.video(output_path)
@@ -256,5 +245,5 @@ def apply_clip_transform(clip, func):
                 st.code(f"{pkg['captions']}\n\n{pkg['hashtags']}")
 
             except Exception as e:
-                st.error("Assembly Error.")
+                st.error("Assembly Error. Check logs for details.")
                 st.text(traceback.format_exc())
