@@ -224,8 +224,18 @@ if st.button("🚀 Generate Pro Ad Video"):
                     end_t = (i + 1) * scene_duration if i < len(subtitles) - 1 else target_duration
                     
                     sub_clip_segment = get_subclip(base_video, start_t, end_t)
-                    textured_clip = sub_clip_segment.fl(lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img))
+                    
+                    # Uses the helper to safely transform frames across both MoviePy versions
+                    textured_clip = apply_clip_transform(
+                        sub_clip_segment,
+                        lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img)
+                    )
                     clips.append(textured_clip)
+def apply_clip_transform(clip, func):
+    """Safely applies frame transformation supporting both MoviePy v1 (.fl) and v2 (.transform)"""
+    if hasattr(clip, "transform"):
+        return clip.transform(func)
+    return clip.fl(func)
 
                 final_clip = concatenate_videoclips(clips)
                 final_clip = final_clip.with_audio(voice_clip)
