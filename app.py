@@ -198,11 +198,13 @@ if st.button("🚀 Generate Pro Ad Video"):
                     base_video = VideoFileClip(raw_video_path)
                     if base_video.duration < target_duration:
                         loops = int(np.ceil(target_duration / base_video.duration))
-                        base_video = concatenate_videoclips([base_video] * loops).subclip(0, target_duration)
+                        # FIXED: Changed .subclip to .subclipped
+                        base_video = concatenate_videoclips([base_video] * loops).subclipped(0, target_duration)
                     else:
-                        base_video = base_video.subclip(0, target_duration)
+                        # FIXED: Changed .subclip to .subclipped
+                        base_video = base_video.subclipped(0, target_duration)
                 else:
-                    # FIX: Solid aesthetic dark background that is 100% compatible with MoviePy v2
+                    # Solid aesthetic dark background that is 100% compatible with MoviePy v2
                     fallback_frame = np.zeros((1280, 720, 3), dtype=np.uint8)
                     fallback_frame[:, :] = [20, 20, 30] # Sleek dark navy
                     base_video = ImageClip(fallback_frame).with_duration(target_duration)
@@ -216,8 +218,9 @@ if st.button("🚀 Generate Pro Ad Video"):
                     start_t = i * scene_duration
                     end_t = (i + 1) * scene_duration if i < len(subtitles) - 1 else target_duration
                     
-                    subclipped = base_video.subclipped(start_t, end_t)
-                    textured_clip = subclipped.fl(lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img))
+                    # FIXED: Changed .subclip to .subclipped
+                    subclip = base_video.subclipped(start_t, end_t)
+                    textured_clip = subclip.fl(lambda get_frame, t, text=sub_text: add_overlays_to_frame(get_frame(t), text, sticker_img))
                     clips.append(textured_clip)
 
                 final_clip = concatenate_videoclips(clips)
@@ -241,3 +244,4 @@ if st.button("🚀 Generate Pro Ad Video"):
             except Exception as e:
                 st.error("Assembly Error.")
                 st.text(traceback.format_exc())
+}
