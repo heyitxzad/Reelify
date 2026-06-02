@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
-from moviepy import VideoFileClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip, ColorClip
+from moviepy import VideoFileClip, concatenate_videoclips, AudioFileClip, ColorClip
 from gradio_client import Client
 from rembg import remove
 
@@ -74,19 +74,18 @@ def get_custom_font(font_size=60):
 def add_overlays_to_frame(frame, text, sticker_img=None):
     img = Image.fromarray(frame).convert("RGBA")
     target_w, target_h = img.size
-    
+
     if sticker_img:
         sticker_w = int(target_w * 0.45)
         sticker_h = int(sticker_img.height * (sticker_w / sticker_img.width))
         sticker_resized = sticker_img.resize((sticker_w, sticker_h), Image.Resampling.LANCZOS)
-        
         paste_x = (target_w - sticker_w) // 2
         paste_y = int(target_h * 0.25)
         img.paste(sticker_resized, (paste_x, paste_y), sticker_resized)
 
     draw = ImageDraw.Draw(img, "RGBA")
     font = get_custom_font(65)
-    font_color = (255, 223, 0, 255) 
+    font_color = (255, 223, 0, 255)
 
     words = text.split()
     lines, current_line = [], []
@@ -98,40 +97,56 @@ def add_overlays_to_frame(frame, text, sticker_img=None):
         else:
             lines.append(" ".join(current_line))
             current_line = [word]
-    if current_line: lines.append(" ".join(current_line))
-    
+    if current_line:
+        lines.append(" ".join(current_line))
+
     wrapped_text = "\n".join(lines)
     center_x = target_w // 2
     y_pos = int(target_h * 0.70)
 
-    draw.multiline_text((center_x, y_pos), wrapped_text, font=font, fill=font_color, stroke_width=8, stroke_fill=(0, 0, 0, 255), anchor="ma", align="center")
+    draw.multiline_text((center_x, y_pos), wrapped_text, font=font, fill=font_color,
+                        stroke_width=8, stroke_fill=(0, 0, 0, 255), anchor="ma", align="center")
     return np.array(img.convert("RGB"))
 
-async def generate_neural_voiceover(text, region, gender, output_path="temp_voiceover.mp3"):
-    voice_map = {
-        "United States_Female": "en-US-EmmaMultilingualNeural",
-        "United States_Male": "en-US-BrianNeural",
-        "United Kingdom_Female": "en-GB-SoniaNeural",
-        "United Kingdom_Male": "en-GB-RyanNeural",
-        "India_Female": "en-IN-NeerjaNeural",
-        "India_Male": "en-IN-PrabhatNeural",
-        "Australia_Female": "en-AU-NatashaNeural",
-        "Australia_Male": "en-AU-WilliamNeural"
-    }
-    voice_actor = voice_map.get(f"{region}_{gender}", "en-US-EmmaMultilingualNeural")
-    communicate = edge_tts.Communicate(text, voice_actor)
-    await communicate.save(output_path)
+# FIX 2: Use a sync wrapper to avoid asyncio.run() conflicts inside Streamlit
+def run_voiceover(text, region, gender, output_path="temp_voiceover.mp3"):
+    async def _inner():
+        voice_map = {
+            "United States_Female": "en-US-EmmaMultilingualNeural",
+            "United States_Male":   "en-US-BrianNeural",
+            "United Kingdom_Female":"en-GB-SoniaNeural",
+            "United Kingdom_Male":  "en-GB-RyanNeural",
+            "India_Female":         "en-IN-NeerjaNeural",
+            "India_Male":           "en-IN-PrabhatNeural",
+            "Australia_Female":     "en-AU-NatashaNeural",
+            "Australia_Male":       "en-AU-WilliamNeural"
+        }
+        voice_actor = voice_map.get(f"{region}_{gender}", "en-US-EmmaMultilingualNeural")
+        communicate = edge_tts.Communicate(text, voice_actor)
+        await communicate.save(output_path)
+    # Safe cross-platform async runner
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import nest_asyncio
+            nest_asyncio.apply()
+            loop.run_until_complete(_inner())
+        else:
+            loop.run_until_complete(_inner())
+    except RuntimeError:
+        asyncio.run(_inner())
     return output_path
 
 def generate_huggingface_video(ai_video_prompt):
     try:
-        st.info("📡 Connecting to Hugging Face Open-Source Video Servers... (This takes a few minutes)")
+        st.info("📡 Connecting to Hugging Face Video Servers... (This takes a few minutes)")
         client = Client("ByteDance/AnimateDiff-Lightning")
         result = client.predict(
-            ai_video_prompt, "bad quality, cartoon, blurry, deformed", 1, 512, 768, api_name="/generate_image"
+            ai_video_prompt, "bad quality, cartoon, blurry, deformed", 1, 512, 768,
+            api_name="/generate_image"
         )
         return result
-    except Exception as e:
+    except Exception:
         st.warning("HF Server busy. Generating fallback layout instead.")
         return None
 
@@ -146,7 +161,7 @@ if st.button("🚀 Generate Pro Ad Video"):
             try:
                 temp_dir = "temp_assets"
                 os.makedirs(temp_dir, exist_ok=True)
-                
+
                 sticker_img = None
                 if uploaded_file:
                     st.info("✨ AI is removing the background from your product photo...")
@@ -158,11 +173,14 @@ if st.button("🚀 Generate Pro Ad Video"):
 
                 st.info("🧠 AI is writing script and video generation blueprint...")
                 client = genai.Client(api_key=gemini_key)
-                prompt = f"Create a viral commercial ad package for '{product_input}'. User vibe: '{user_prompt}'. Max 30 words for voiceover. For the ai_video_prompt, describe a 4k vertical shot of a model."
-                
-                max_retries = 3
+                prompt = (
+                    f"Create a viral commercial ad package for '{product_input}'. "
+                    f"User vibe: '{user_prompt}'. Max 30 words for voiceover. "
+                    f"For the ai_video_prompt, describe a 4k vertical shot of a model."
+                )
+
                 pkg = None
-                for attempt in range(max_retries):
+                for attempt in range(3):
                     try:
                         response = client.models.generate_content(
                             model='gemini-2.5-flash',
@@ -176,10 +194,10 @@ if st.button("🚀 Generate Pro Ad Video"):
                         break
                     except Exception as e:
                         if "503" in str(e) or "UNAVAILABLE" in str(e):
-                            if attempt < max_retries - 1:
+                            if attempt < 2:
                                 time.sleep(5)
                             else:
-                                st.error("Google Gemini is overloaded right now. Please try again in 1 minute!")
+                                st.error("Google Gemini is overloaded. Please try again in 1 minute!")
                                 st.stop()
                         else:
                             raise e
@@ -188,12 +206,13 @@ if st.button("🚀 Generate Pro Ad Video"):
 
                 st.info("🎙️ Generating Neural Voiceover...")
                 voice_path = "temp_voiceover.mp3"
-                asyncio.run(generate_neural_voiceover(pkg["voiceover_text"], voice_region, voice_gender, voice_path))
+                run_voiceover(pkg["voiceover_text"], voice_region, voice_gender, voice_path)
                 voice_clip = AudioFileClip(voice_path)
                 target_duration = voice_clip.duration
 
                 raw_video_path = generate_huggingface_video(pkg["ai_video_prompt"])
-                
+
+                # FIX 1: Use .subclipped() everywhere — MoviePy 2.x renamed .subclip() to .subclipped()
                 if raw_video_path and os.path.exists(raw_video_path):
                     base_video = VideoFileClip(raw_video_path)
                     if base_video.duration < target_duration:
@@ -207,19 +226,23 @@ if st.button("🚀 Generate Pro Ad Video"):
                 st.info("🎬 Compositing Video, Product Sticker, and Subtitles...")
                 scene_duration = target_duration / len(subtitles)
                 clips = []
-                
-                for i in range(len(subtitles)):
-                    sub_text = subtitles[i]
+
+                for i, sub_text in enumerate(subtitles):
                     start_t = i * scene_duration
                     end_t = (i + 1) * scene_duration if i < len(subtitles) - 1 else target_duration
-                    
-                    subclip = base_video.subclipped(start_t, end_t)
-                    
+
+                    # FIX 1 (continued): .subclipped() not .subclip()
+                    scene_clip = base_video.subclipped(start_t, end_t)
+
                     try:
-                        textured_clip = subclip.image_transform(lambda frame, text=sub_text: add_overlays_to_frame(frame, text, sticker_img))
+                        textured_clip = scene_clip.image_transform(
+                            lambda frame, text=sub_text: add_overlays_to_frame(frame, text, sticker_img)
+                        )
                     except AttributeError:
-                        textured_clip = subclip.fl_image(lambda frame, text=sub_text: add_overlays_to_frame(frame, text, sticker_img))
-                    
+                        textured_clip = scene_clip.fl_image(
+                            lambda frame, text=sub_text: add_overlays_to_frame(frame, text, sticker_img)
+                        )
+
                     clips.append(textured_clip)
 
                 final_clip = concatenate_videoclips(clips)
@@ -228,19 +251,21 @@ if st.button("🚀 Generate Pro Ad Video"):
                 output_path = "output_live_model_ad.mp4"
                 final_clip.write_videofile(output_path, fps=24, codec="libx264", audio=True)
 
-                for c in clips: c.close()
+                for c in clips:
+                    c.close()
                 voice_clip.close()
                 final_clip.close()
                 try:
                     base_video.close()
-                except:
+                except Exception:
                     pass
 
                 st.success("🎉 Final Ad Completed!")
                 st.video(output_path)
                 with open(output_path, "rb") as file:
-                    st.download_button("💾 Download Masterpiece", data=file, file_name="reelify_pro_ad.mp4", mime="video/mp4")
-                
+                    st.download_button("💾 Download Masterpiece", data=file,
+                                       file_name="reelify_pro_ad.mp4", mime="video/mp4")
+
                 st.code(f"{pkg['captions']}\n\n{pkg['hashtags']}")
 
             except Exception as e:
