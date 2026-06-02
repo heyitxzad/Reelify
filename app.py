@@ -5,10 +5,12 @@ import urllib.request
 import numpy as np
 import traceback
 import asyncio
+import time
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
 from google import genai
-from moviepy import ImageClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
+from google.genai import types
+from moviepy import ImageClip, VideoFileClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
 
 # ----------------------------------------------------------
 # 1. STREAMLIT APP LAYOUT & DESIGNS (Reelify Branded)
@@ -38,9 +40,18 @@ gemini_key = st.sidebar.text_input("Enter GEMINI_API_KEY", type="password", help
 product_input = st.text_input("Product Name / Affiliate Keyword", placeholder="e.g. Good Molecules Azelaic Acid Cleanser")
 
 # Separate Inputs: Presenter Model AND User Uploads
-st.subheader("👤 Step 1: Choose Your Presenter Model")
+st.subheader("⚙️ Step 1: Choose Video Rendering Mode")
+video_mode = st.selectbox(
+    "Select the processing engine:",
+    [
+        "Aesthetic Image Slideshow (Instant & Free)",
+        "Google Veo 3.1 Video Gen (Experimental - Requires Paid API Key)"
+    ]
+)
+
+st.subheader("👤 Step 2: Choose Your Presenter Model Style")
 model_choice = st.selectbox(
-    "Select an AI model to present your product:",
+    "Select an AI model background style (Used in Slideshow mode):",
     [
         "Skincare / Beauty Model (Female)",
         "Skincare / Grooming Model (Male)",
@@ -48,9 +59,9 @@ model_choice = st.selectbox(
     ]
 )
 
-st.subheader("📸 Step 2: Upload Your Product Photos (Optional)")
+st.subheader("📸 Step 3: Upload Your Product Photos (Optional)")
 uploaded_files = st.file_uploader(
-    "Upload photos of your product. If added, the editor will dynamically blend them with the model photos!",
+    "Upload photos of your product. For Slideshows, it alternates beautifully with model photos. For Veo, it serves as the design template!",
     accept_multiple_files=True,
     type=['png', 'jpg', 'jpeg']
 )
@@ -58,7 +69,6 @@ uploaded_files = st.file_uploader(
 # ----------------------------------------------------------
 # 2. ADVANCED BACKEND PIPELINE
 # ----------------------------------------------------------
-# Downloads a high-impact advertising font
 def get_custom_font(font_size=55):
     font_path = "Anton-Regular.ttf"
     if not os.path.exists(font_path):
@@ -85,23 +95,20 @@ def draw_smart_text(image_path, text, styling):
         new_w = int(target_h * img_ratio)
         
     img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    
-    # Create dark-grey solid background canvas
     canvas = Image.new("RGBA", (target_w, target_h), (18, 18, 18, 255))
     
-    # Paste resized image centered
+    # Paste centered
     paste_x = (target_w - new_w) // 2
     paste_y = (target_h - new_h) // 2
     canvas.paste(img_resized, (paste_x, paste_y))
 
     draw = ImageDraw.Draw(canvas, "RGBA")
-    font = get_custom_font(55) # Large, bold advertising font
+    font = get_custom_font(55)
 
     color_map = {"yellow": (255, 223, 0, 255), "white": (255, 255, 255, 255), "cyan": (0, 255, 255, 255)}
     font_color = color_map.get(styling.get("text_color"), (255, 255, 255, 255))
     text_style = styling.get("text_style", "tiktok_stroke")
 
-    # Wrap subtitles
     words = text.split()
     lines, current_line = [], []
     for word in words:
@@ -119,7 +126,7 @@ def draw_smart_text(image_path, text, styling):
     text_h = draw.multiline_textbbox((0, 0), wrapped_text, font=font, align="center")[3]
     
     center_x = target_w // 2
-    y_pos = int(target_h * 0.72) # Positioned lower to avoid covering the product
+    y_pos = int(target_h * 0.72)
 
     if text_style == "tiktok_stroke":
         draw.multiline_text((center_x, y_pos), wrapped_text, font=font, fill=font_color, stroke_width=6, stroke_fill=(0, 0, 0, 255), anchor="ma", align="center")
@@ -132,19 +139,18 @@ def draw_smart_text(image_path, text, styling):
         draw.rectangle([(0, y_pos - 10), (target_w, y_pos + text_h + padding*2)], fill=(0, 0, 0, 160))
         draw.multiline_text((center_x, y_pos + padding - 10), wrapped_text, font=font, fill=font_color, anchor="ma", align="center")
         
-    return canvas # FIXED HERE!
+    return canvas
 
-# Stable High-Res Aesthetic Stock Images of Models
 MODEL_PHOTOS_URLS = {
     "beauty_female": [
-        "https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800", # Beauty setup
-        "https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?w=800", # Skincare application
-        "https://images.unsplash.com/photo-1608248597481-496100c80836?w=800"  # Skincare texture / dropper
+        "https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800",
+        "https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?w=800",
+        "https://images.unsplash.com/photo-1608248597481-496100c80836?w=800"
     ],
     "beauty_male": [
-        "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?w=800", # Male grooming product
-        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=800", # Clean skincare close up
-        "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=800"  # Clean smile close up
+        "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?w=800",
+        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=800",
+        "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=800"
     ]
 }
 
@@ -152,7 +158,6 @@ def download_model_photos(style_key, temp_dir="temp_assets"):
     os.makedirs(temp_dir, exist_ok=True)
     urls = MODEL_PHOTOS_URLS.get(style_key, MODEL_PHOTOS_URLS["beauty_female"])
     downloaded_paths = []
-    
     for i, url in enumerate(urls):
         filename = f"model_photo_{i}.jpg"
         dest_path = os.path.join(temp_dir, filename)
@@ -184,7 +189,7 @@ if st.button("🚀 Generate High-Conversion Video"):
     elif "None" in model_choice and not uploaded_files:
         st.error("Please upload at least 2 product photos if you are not using a model!")
     else:
-        with st.spinner("AI is directing layout, synthesizing neural voice, and rendering video..."):
+        with st.spinner("Processing generation loop..."):
             try:
                 temp_dir = "temp_assets"
                 os.makedirs(temp_dir, exist_ok=True)
@@ -194,11 +199,9 @@ if st.button("🚀 Generate High-Conversion Video"):
                 voice_gender = "female"
                 
                 if "Female" in model_choice:
-                    st.info("Directing Elegant Female Model...")
                     model_assets = download_model_photos("beauty_female", temp_dir)
                     voice_gender = "female"
                 elif "Male" in model_choice:
-                    st.info("Directing Clean Grooming Male Model...")
                     model_assets = download_model_photos("beauty_male", temp_dir)
                     voice_gender = "male"
                 
@@ -213,7 +216,7 @@ if st.button("🚀 Generate High-Conversion Video"):
                         uploaded_assets.append(path)
                     uploaded_assets.sort()
 
-                # Dynamic Blend (Interleave): Alternates between model photo and product photo
+                # Blend (Interleave)
                 saved_assets = []
                 max_len = max(len(model_assets), len(uploaded_assets))
                 for i in range(max_len):
@@ -221,9 +224,6 @@ if st.button("🚀 Generate High-Conversion Video"):
                         saved_assets.append(model_assets[i])
                     if i < len(uploaded_assets):
                         saved_assets.append(uploaded_assets[i])
-
-                if not saved_assets:
-                    raise ValueError("No assets found to compile.")
 
                 # 2. Call Gemini for copy
                 if not gemini_key:
@@ -257,34 +257,89 @@ if st.button("🚀 Generate High-Conversion Video"):
                 st.info("🎬 Rendering dynamic video scenes...")
                 voice_clip = AudioFileClip(voice_path)
                 total_duration = voice_clip.duration
-                scene_duration = total_duration / len(saved_assets)
-                
-                clips = []
-                num_subs = len(pkg["script"])
-                sub_display_time = total_duration / num_subs
-
-                for i, asset_path in enumerate(saved_assets):
-                    # Align subtitle segments with the timeline
-                    current_time = i * scene_duration
-                    sub_idx = min(int(current_time / sub_display_time), num_subs - 1)
-                    sub_text = pkg["script"][sub_idx]
-                    
-                    processed_img = draw_smart_text(asset_path, sub_text, pkg["styling"])
-                    clip = ImageClip(np.array(processed_img)).with_duration(scene_duration)
-                    clips.append(clip)
-
-                # Concatenate
-                final_clip = concatenate_videoclips(clips, method="compose")
-                
-                audio_tracks = [voice_clip.with_volume_scaled(1.0)]
-                final_clip = final_clip.with_audio(CompositeAudioClip(audio_tracks))
-
                 output_path = "output_viral_video.mp4"
-                final_clip.write_videofile(output_path, fps=24, codec="libx264", audio=True)
-                
-                for c in clips: c.close()
+
+                # MODE A: SLIDESHOW COMPILE
+                if "Slideshow" in video_mode:
+                    if not saved_assets:
+                        raise ValueError("No assets found to compile.")
+                    scene_duration = total_duration / len(saved_assets)
+                    
+                    clips = []
+                    num_subs = len(pkg["script"])
+                    sub_display_time = total_duration / num_subs
+
+                    for i, asset_path in enumerate(saved_assets):
+                        current_time = i * scene_duration
+                        sub_idx = min(int(current_time / sub_display_time), num_subs - 1)
+                        sub_text = pkg["script"][sub_idx]
+                        
+                        processed_img = draw_smart_text(asset_path, sub_text, pkg["styling"])
+                        clip = ImageClip(np.array(processed_img)).with_duration(scene_duration)
+                        clips.append(clip)
+
+                    final_clip = concatenate_videoclips(clips, method="compose")
+                    audio_tracks = [voice_clip.with_volume_scaled(1.0)]
+                    final_clip = final_clip.with_audio(CompositeAudioClip(audio_tracks))
+                    final_clip.write_videofile(output_path, fps=24, codec="libx264", audio=True)
+                    for c in clips: c.close()
+                    final_clip.close()
+
+                # MODE B: GOOGLE VEO 3.1 GENERATION
+                else:
+                    if not gemini_key:
+                        st.error("Google Veo 3.1 requires a valid, paid-tier GEMINI_API_KEY!")
+                    else:
+                        st.info("🚀 Initiating Google Veo 3.1 Video Generation...")
+                        st.info("This usually takes 2 to 3 minutes as Google's servers render the video. Please wait...")
+                        
+                        client = genai.Client(api_key=gemini_key)
+                        veo_prompt = f"A high-end vertical 9:16 beauty commercial video. A highly attractive model confidently uses and presents '{product_input}' in a beautifully-lit luxury bathroom. Smooth cinematic motion, 4k realism, professional studio lighting."
+                        
+                        config_args = {
+                            "aspect_ratio": "9:16",
+                            "duration_seconds": 8
+                        }
+                        
+                        # Use uploaded image as design reference if available
+                        if uploaded_assets:
+                            st.info("Uploading reference product image to Google AI Studio...")
+                            ref_file = client.files.upload(file=uploaded_assets[0])
+                            config_args["reference_images"] = [ref_file]
+                        
+                        # Call Veo 3.1
+                        operation = client.models.generate_videos(
+                            model="veo-3.1-generate-preview",
+                            prompt=veo_prompt,
+                            config=types.GenerateVideosConfig(**config_args)
+                        )
+                        
+                        # Wait for Veo rendering
+                        while not operation.done:
+                            st.write("⏳ Render in progress on Google Server... polling...")
+                            time.sleep(15)
+                            operation = client.operations.get(operation)
+                            
+                        st.success("✓ Google Veo completed rendering!")
+                        generated_video = operation.response.generated_videos[0]
+                        
+                        # Download raw generated video
+                        st.info("Downloading raw video from Google AI Studio...")
+                        client.files.download(file=generated_video.video)
+                        temp_veo_path = "temp_veo.mp4"
+                        generated_video.video.save(temp_veo_path)
+                        
+                        # Load generated video, add audio track & subtitle
+                        video_clip = VideoFileClip(temp_veo_path).with_duration(total_duration)
+                        audio_tracks = [voice_clip.with_volume_scaled(1.0)]
+                        
+                        final_clip = video_clip.with_audio(CompositeAudioClip(audio_tracks))
+                        final_clip.write_videofile(output_path, fps=24, codec="libx264", audio=True)
+                        
+                        video_clip.close()
+                        final_clip.close()
+
                 voice_clip.close()
-                final_clip.close()
 
                 # ----------------------------------------------------------
                 # 4. DISPLAY THE OUTPUTS IN APP
