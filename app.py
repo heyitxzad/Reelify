@@ -10,12 +10,24 @@ from google import genai
 from moviepy import ImageClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
 
 # ----------------------------------------------------------
-# 1. STREAMLIT APP LAYOUT & DESIGNS
+# 1. STREAMLIT APP LAYOUT & DESIGNS (Branded)
 # ----------------------------------------------------------
-st.set_page_config(page_title="AI Viral Video Generator", page_icon="🎬", layout="centered")
+st.set_page_config(page_title="Reelify", page_icon="🎬", layout="centered")
 
-st.title("🎬 Smart AI Viral Video Editor")
-st.write("Upload product photos, enter your keyword, and let the AI build a styled, voiced-over video automatically!")
+# Branded Red Header with stylized 'R'
+st.markdown(
+    """
+    <div style="text-align: center; margin-top: -30px; margin-bottom: 20px;">
+        <div style="font-size: 55px; font-weight: 800; color: #E53935; font-family: 'Helvetica Neue', Arial, sans-serif; letter-spacing: -1px;">
+            <span style="font-family: 'Georgia', 'Times New Roman', serif; font-size: 72px; font-style: italic; color: #B71C1C; font-weight: 900; margin-right: -6px;">R</span>eelify
+        </div>
+        <p style="font-size: 15px; color: #666666; margin-top: 5px;">
+            Upload product photos, enter your keyword, and let the AI build a styled, voiced-over video automatically!
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 # Sidebar for credentials and configurations
 st.sidebar.header("🔑 App Settings")
@@ -28,7 +40,6 @@ uploaded_files = st.file_uploader("Upload Product Photos or Videos", accept_mult
 # ----------------------------------------------------------
 # 2. BACKEND PIPELINE LOGIC
 # ----------------------------------------------------------
-# Define helper rendering functions
 def draw_smart_text(image_path, text, styling):
     img = Image.open(image_path)
     target_w, target_h = 720, 1280
@@ -45,13 +56,12 @@ def draw_smart_text(image_path, text, styling):
         img_final = img.resize((target_w, new_h), Image.Resampling.LANCZOS).crop((0, (new_h - target_h) // 2, target_w, (new_h - target_h) // 2 + target_h))
 
     draw = ImageDraw.Draw(img_final, "RGBA")
-    font = ImageFont.load_default() # Fallback safe font for web servers
+    font = ImageFont.load_default()
 
     color_map = {"yellow": (255, 223, 0, 255), "white": (255, 255, 255, 255), "cyan": (0, 255, 255, 255)}
     font_color = color_map.get(styling.get("text_color"), (255, 255, 255, 255))
     text_style = styling.get("text_style", "tiktok_stroke")
 
-    # Text wrapping
     words = text.split()
     lines, current_line = [], []
     for word in words:
@@ -95,7 +105,6 @@ if st.button("🚀 Generate Viral Short-Form Video"):
     else:
         with st.spinner("AI is analyzing product, generating script, voiceover, and rendering video..."):
             try:
-                # 1. Clean and save uploaded files to a temporary directory
                 temp_dir = "temp_assets"
                 os.makedirs(temp_dir, exist_ok=True)
                 for file in os.listdir(temp_dir):
@@ -109,7 +118,6 @@ if st.button("🚀 Generate Viral Short-Form Video"):
                     saved_assets.append(path)
                 saved_assets.sort()
 
-                # 2. Call Gemini for Script & styling package
                 if not gemini_key:
                     pkg = {
                         "script": ["Looking for a game-changer?", f"This {product_input} upgrades your routine instantly.", "Get yours today! Link in bio!"],
@@ -128,12 +136,10 @@ if st.button("🚀 Generate Viral Short-Form Video"):
                     if text.endswith("```"): text = text[:-3]
                     pkg = json.loads(text.strip())
 
-                # 3. Create Voiceover
                 voice_path = "temp_voiceover.mp3"
                 tts = gTTS(text=pkg["voiceover_text"], lang='en', slow=False)
                 tts.save(voice_path)
 
-                # 4. Compile Video Scenes
                 voice_clip = AudioFileClip(voice_path)
                 total_duration = voice_clip.duration
                 scene_duration = total_duration / len(saved_assets)
@@ -148,30 +154,21 @@ if st.button("🚀 Generate Viral Short-Form Video"):
                     sub_text = pkg["script"][sub_idx]
                     
                     processed_img = draw_smart_text(asset_path, sub_text, pkg["styling"])
-                    # MoviePy v2.x: .with_duration()
                     clip = ImageClip(np.array(processed_img)).with_duration(scene_duration)
                     clips.append(clip)
 
-                # MoviePy v2.x: clean concatenate
                 final_clip = concatenate_videoclips(clips, method="compose")
                 
-                # Mix audio tracks
-                # MoviePy v2.x: .with_volume_scaled()
                 audio_tracks = [voice_clip.with_volume_scaled(1.0)]
-                # MoviePy v2.x: .with_audio()
                 final_clip = final_clip.with_audio(CompositeAudioClip(audio_tracks))
 
                 output_path = "output_viral_video.mp4"
                 final_clip.write_videofile(output_path, fps=24, codec="libx264", audio=True)
                 
-                # Close files to free memory
                 for c in clips: c.close()
                 voice_clip.close()
                 final_clip.close()
 
-                # ----------------------------------------------------------
-                # 4. DISPLAY THE OUTPUTS IN APP
-                # ----------------------------------------------------------
                 st.success("🎉 Video Successfully Compiled!")
                 st.video(output_path)
                 
