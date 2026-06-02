@@ -5,19 +5,17 @@ import urllib.request
 import numpy as np
 import traceback
 import asyncio
-import time
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
 from google import genai
-from google.genai import types
-from moviepy import ImageClip, VideoFileClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
+from moviepy import ImageClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
 
 # ----------------------------------------------------------
-# 1. STREAMLIT APP LAYOUT & DESIGNS (Reelify Branded)
+# 1. STREAMLIT APP LAYOUT & DESIGNS (Reelify)
 # ----------------------------------------------------------
 st.set_page_config(page_title="Reelify", page_icon="🎬", layout="centered")
 
-# Branded Red Header with stylized 'R'
+# Branded Red Header
 st.markdown(
     """
     <div style="text-align: center; margin-top: -30px; margin-bottom: 20px;">
@@ -38,30 +36,31 @@ gemini_key = st.sidebar.text_input("Enter GEMINI_API_KEY", type="password", help
 
 # Main Inputs
 product_input = st.text_input("Product Name / Affiliate Keyword", placeholder="e.g. Good Molecules Azelaic Acid Cleanser")
+user_prompt = st.text_area("Video Prompt / Vibe (Optional)", placeholder="e.g. Make it feel super energetic, focused on clearing acne for sensitive skin.")
 
-# Separate Inputs: Presenter Model AND User Uploads
-st.subheader("⚙️ Step 1: Choose Video Rendering Mode")
-video_mode = st.selectbox(
-    "Select the processing engine:",
-    [
-        "Aesthetic Image Slideshow (Instant & Free)",
-        "Google Veo 3.1 Video Gen (Experimental - Requires Paid API Key)"
-    ]
-)
+# Step 1: Model Selection
+st.subheader("👤 Step 1: Select Your Presenter Model")
+col1, col2 = st.columns(2)
+with col1:
+    model_gender = st.selectbox("Model Gender:", ["Female", "Male"])
+with col2:
+    model_ethnicity = st.selectbox(
+        "Model Region / Ethnicity:",
+        ["East Asian", "South Asian / Indian", "Black / African", "Caucasian / Western", "None (Use Uploaded Assets Only)"]
+    )
 
-st.subheader("👤 Step 2: Choose Your Presenter Model Style")
-model_choice = st.selectbox(
-    "Select an AI model background style (Used in Slideshow mode):",
-    [
-        "Skincare / Beauty Model (Female)",
-        "Skincare / Grooming Model (Male)",
-        "None (Use Uploaded Assets Only)"
-    ]
-)
+# Step 2: Voice Selection
+st.subheader("🎙️ Step 2: Select Your Presenter Voice & Tone")
+col3, col4 = st.columns(2)
+with col3:
+    voice_region = st.selectbox("Voice Accent / Region:", ["United States", "United Kingdom", "Australia", "India"])
+with col4:
+    voice_tone = st.selectbox("Voice Tone / Style:", ["Confident & Energetic", "Warm & Conversational", "Calm & Professional"])
 
-st.subheader("📸 Step 3: Upload Your Product Photos (Optional)")
+# Step 3: Product Upload
+st.subheader("📸 Step 3: Upload Product Photos (Optional)")
 uploaded_files = st.file_uploader(
-    "Upload photos of your product. For Slideshows, it alternates beautifully with model photos. For Veo, it serves as the design template!",
+    "Upload photos of your product. If added, the editor will dynamically blend them with your chosen model photos!",
     accept_multiple_files=True,
     type=['png', 'jpg', 'jpeg']
 )
@@ -69,6 +68,7 @@ uploaded_files = st.file_uploader(
 # ----------------------------------------------------------
 # 2. ADVANCED BACKEND PIPELINE
 # ----------------------------------------------------------
+# Downloads a high-impact advertising font
 def get_custom_font(font_size=55):
     font_path = "Anton-Regular.ttf"
     if not os.path.exists(font_path):
@@ -141,23 +141,56 @@ def draw_smart_text(image_path, text, styling):
         
     return canvas
 
-MODEL_PHOTOS_URLS = {
-    "beauty_female": [
-        "https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800",
-        "https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?w=800",
-        "https://images.unsplash.com/photo-1608248597481-496100c80836?w=800"
+# Dynamic Database of Free, Premium Vertical Photos of Models
+MODEL_DATABASE = {
+    "Female_East Asian": [
+        "https://images.unsplash.com/photo-1512290923902-8a9f81dc236c?w=800", # Glowing skin apply
+        "https://images.unsplash.com/photo-1501196354995-cbb51c65aaea?w=800", # Elegant smile
+        "https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=800"  # Skincare routine
     ],
-    "beauty_male": [
-        "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?w=800",
-        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=800",
-        "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=800"
+    "Female_South Asian / Indian": [
+        "https://images.unsplash.com/photo-1617897903246-719242758050?w=800", # Warm skincare dropper
+        "https://images.unsplash.com/photo-1601412436009-d964bd02edbc?w=800", # Aesthetic model smile
+        "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=800"  # Clean face close up
+    ],
+    "Female_Black / African": [
+        "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?w=800", # Confident glowing skin
+        "https://images.unsplash.com/photo-1523824921871-d6f1a15151f1?w=800", # Aesthetic skincare wash
+        "https://images.unsplash.com/photo-1509631179647-0177331693ae?w=800"  # Gorgeous smile close up
+    ],
+    "Female_Caucasian / Western": [
+        "https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800", # Elegant bathroom skincare
+        "https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?w=800", # Applying moisturizer
+        "https://images.unsplash.com/photo-1608248597481-496100c80836?w=800"  # Serum dropper
+    ],
+    "Male_East Asian": [
+        "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800", # Friendly clean smile
+        "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?w=800", # Skincare routine male
+        "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=800"  # Fresh skin close up
+    ],
+    "Male_South Asian / Indian": [
+        "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=800", # Confident male grooming
+        "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=800", # Clean smile close up
+        "https://images.unsplash.com/photo-1618015358954-115ef1ed1515?w=800"  # Grooming routine
+    ],
+    "Male_Black / African": [
+        "https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=800", # Energetic handsome smile
+        "https://images.unsplash.com/photo-1503944583220-79d8926ad5e2?w=800", # Grooming facial shot
+        "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=800"  # Clean model look
+    ],
+    "Male_Caucasian / Western": [
+        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=800", # Luxury grooming aesthetic
+        "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=800", # Sharp model jawline
+        "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=800"  # Clean smile
     ]
 }
 
-def download_model_photos(style_key, temp_dir="temp_assets"):
+def download_model_photos(gender, ethnicity, temp_dir="temp_assets"):
     os.makedirs(temp_dir, exist_ok=True)
-    urls = MODEL_PHOTOS_URLS.get(style_key, MODEL_PHOTOS_URLS["beauty_female"])
+    key = f"{gender}_{ethnicity}"
+    urls = MODEL_DATABASE.get(key, MODEL_DATABASE["Female_Caucasian / Western"])
     downloaded_paths = []
+    
     for i, url in enumerate(urls):
         filename = f"model_photo_{i}.jpg"
         dest_path = os.path.join(temp_dir, filename)
@@ -174,8 +207,29 @@ def download_model_photos(style_key, temp_dir="temp_assets"):
             downloaded_paths.append(dest_path)
     return downloaded_paths
 
-async def generate_neural_voiceover(text, voice_gender, output_path="temp_voiceover.mp3"):
-    voice_actor = "en-US-EmmaMultilingualNeural" if voice_gender == "female" else "en-US-BrianNeural"
+# Free Edge Neural Voices mapping
+VOICE_MAP = {
+    "United States_Female_Confident & Energetic": "en-US-EmmaMultilingualNeural",
+    "United States_Female_Warm & Conversational": "en-US-AvaNeural",
+    "United States_Female_Calm & Professional": "en-US-JennyNeural",
+    
+    "United States_Male_Confident & Energetic": "en-US-BrianNeural",
+    "United States_Male_Warm & Conversational": "en-US-GuyNeural",
+    "United States_Male_Calm & Professional": "en-US-AndrewNeural",
+    
+    "United Kingdom_Female_Confident & Energetic": "en-GB-SoniaNeural",
+    "United Kingdom_Male_Confident & Energetic": "en-GB-RyanNeural",
+    
+    "Australia_Female_Confident & Energetic": "en-AU-NatashaNeural",
+    
+    "India_Female_Confident & Energetic": "en-IN-NeerjaNeural",
+    "India_Male_Confident & Energetic": "en-IN-PrabhatNeural",
+}
+
+async def generate_neural_voiceover(text, region, gender, tone, output_path="temp_voiceover.mp3"):
+    key = f"{region}_{gender}_{tone}"
+    # Fallback to standard US Emma if not found
+    voice_actor = VOICE_MAP.get(key, VOICE_MAP.get(f"United States_{gender}_Confident & Energetic", "en-US-EmmaMultilingualNeural"))
     communicate = edge_tts.Communicate(text, voice_actor)
     await communicate.save(output_path)
     return output_path
@@ -183,29 +237,24 @@ async def generate_neural_voiceover(text, voice_gender, output_path="temp_voiceo
 # ----------------------------------------------------------
 # 3. RUN GENERATION ACTION
 # ----------------------------------------------------------
-if st.button("🚀 Generate High-Conversion Video"):
+if st.button("🚀 Generate Viral Ad Video"):
     if not product_input:
         st.error("Please enter your product name first!")
-    elif "None" in model_choice and not uploaded_files:
+    elif "None" in model_ethnicity and not uploaded_files:
         st.error("Please upload at least 2 product photos if you are not using a model!")
     else:
-        with st.spinner("Processing generation loop..."):
+        with st.spinner("Reelify is analyzing, generating natural speech, and aligning custom layouts..."):
             try:
                 temp_dir = "temp_assets"
                 os.makedirs(temp_dir, exist_ok=True)
                 
-                # Setup model assets
+                # 1. Setup model assets
                 model_assets = []
-                voice_gender = "female"
+                if "None" not in model_ethnicity:
+                    st.info(f"Directing {model_ethnicity} {model_gender} Presenter Model...")
+                    model_assets = download_model_photos(model_gender, model_ethnicity, temp_dir)
                 
-                if "Female" in model_choice:
-                    model_assets = download_model_photos("beauty_female", temp_dir)
-                    voice_gender = "female"
-                elif "Male" in model_choice:
-                    model_assets = download_model_photos("beauty_male", temp_dir)
-                    voice_gender = "male"
-                
-                # Setup user uploaded assets
+                # 2. Setup user uploaded assets
                 uploaded_assets = []
                 if uploaded_files:
                     st.info("Loading your product photos...")
@@ -216,7 +265,7 @@ if st.button("🚀 Generate High-Conversion Video"):
                         uploaded_assets.append(path)
                     uploaded_assets.sort()
 
-                # Blend (Interleave)
+                # Dynamic Blend (Interleave)
                 saved_assets = []
                 max_len = max(len(model_assets), len(uploaded_assets))
                 for i in range(max_len):
@@ -225,7 +274,10 @@ if st.button("🚀 Generate High-Conversion Video"):
                     if i < len(uploaded_assets):
                         saved_assets.append(uploaded_assets[i])
 
-                # 2. Call Gemini for copy
+                if not saved_assets:
+                    raise ValueError("No assets found to compile.")
+
+                # 3. Call Gemini for copy based on prompt
                 if not gemini_key:
                     pkg = {
                         "script": [
@@ -240,7 +292,12 @@ if st.button("🚀 Generate High-Conversion Video"):
                     }
                 else:
                     client = genai.Client(api_key=gemini_key)
-                    prompt = f'Create a viral vertical ad script for "{product_input}". Output raw JSON only.'
+                    prompt_instructions = (
+                        f"Write a conversational, high-converting social media script for '{product_input}'. "
+                        f"Tone guidelines: {user_prompt if user_prompt else 'conversational, excited, talking to a friend'}. "
+                        "Do not sound robotic. Output raw JSON only."
+                    )
+                    prompt = f'{prompt_instructions}. Output raw JSON only.'
                     response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
                     text = response.text.strip()
                     if text.startswith("```json"): text = text[7:]
@@ -248,98 +305,43 @@ if st.button("🚀 Generate High-Conversion Video"):
                     if text.endswith("```"): text = text[:-3]
                     pkg = json.loads(text.strip())
 
-                # 3. Create Neural Voiceover
+                # 4. Create Neural Voiceover (100% realistic)
                 st.info("🎙️ Synthesizing Premium Human-like Neural Voiceover...")
                 voice_path = "temp_voiceover.mp3"
-                asyncio.run(generate_neural_voiceover(pkg["voiceover_text"], voice_gender, voice_path))
+                asyncio.run(generate_neural_voiceover(pkg["voiceover_text"], voice_region, model_gender, voice_tone, voice_path))
 
-                # 4. Compile Video Scenes
+                # 5. Compile Video Scenes
                 st.info("🎬 Rendering dynamic video scenes...")
                 voice_clip = AudioFileClip(voice_path)
                 total_duration = voice_clip.duration
-                output_path = "output_viral_video.mp4"
+                scene_duration = total_duration / len(saved_assets)
+                
+                clips = []
+                num_subs = len(pkg["script"])
+                sub_display_time = total_duration / num_subs
 
-                # MODE A: SLIDESHOW COMPILE
-                if "Slideshow" in video_mode:
-                    if not saved_assets:
-                        raise ValueError("No assets found to compile.")
-                    scene_duration = total_duration / len(saved_assets)
+                for i, asset_path in enumerate(saved_assets):
+                    # Subtitle synchronization
+                    current_time = i * scene_duration
+                    sub_idx = min(int(current_time / sub_display_time), num_subs - 1)
+                    sub_text = pkg["script"][sub_idx]
                     
-                    clips = []
-                    num_subs = len(pkg["script"])
-                    sub_display_time = total_duration / num_subs
+                    processed_img = draw_smart_text(asset_path, sub_text, pkg["styling"])
+                    clip = ImageClip(np.array(processed_img)).with_duration(scene_duration)
+                    clips.append(clip)
 
-                    for i, asset_path in enumerate(saved_assets):
-                        current_time = i * scene_duration
-                        sub_idx = min(int(current_time / sub_display_time), num_subs - 1)
-                        sub_text = pkg["script"][sub_idx]
-                        
-                        processed_img = draw_smart_text(asset_path, sub_text, pkg["styling"])
-                        clip = ImageClip(np.array(processed_img)).with_duration(scene_duration)
-                        clips.append(clip)
+                # Concatenate
+                final_clip = concatenate_videoclips(clips, method="compose")
+                
+                audio_tracks = [voice_clip.with_volume_scaled(1.0)]
+                final_clip = final_clip.with_audio(CompositeAudioClip(audio_tracks))
 
-                    final_clip = concatenate_videoclips(clips, method="compose")
-                    audio_tracks = [voice_clip.with_volume_scaled(1.0)]
-                    final_clip = final_clip.with_audio(CompositeAudioClip(audio_tracks))
-                    final_clip.write_videofile(output_path, fps=24, codec="libx264", audio=True)
-                    for c in clips: c.close()
-                    final_clip.close()
-
-                # MODE B: GOOGLE VEO 3.1 GENERATION
-                else:
-                    if not gemini_key:
-                        st.error("Google Veo 3.1 requires a valid, paid-tier GEMINI_API_KEY!")
-                    else:
-                        st.info("🚀 Initiating Google Veo 3.1 Video Generation...")
-                        st.info("This usually takes 2 to 3 minutes as Google's servers render the video. Please wait...")
-                        
-                        client = genai.Client(api_key=gemini_key)
-                        veo_prompt = f"A high-end vertical 9:16 beauty commercial video. A highly attractive model confidently uses and presents '{product_input}' in a beautifully-lit luxury bathroom. Smooth cinematic motion, 4k realism, professional studio lighting."
-                        
-                        config_args = {
-                            "aspect_ratio": "9:16",
-                            "duration_seconds": 8
-                        }
-                        
-                        # Use uploaded image as design reference if available
-                        if uploaded_assets:
-                            st.info("Uploading reference product image to Google AI Studio...")
-                            ref_file = client.files.upload(file=uploaded_assets[0])
-                            config_args["reference_images"] = [ref_file]
-                        
-                        # Call Veo 3.1
-                        operation = client.models.generate_videos(
-                            model="veo-3.1-generate-preview",
-                            prompt=veo_prompt,
-                            config=types.GenerateVideosConfig(**config_args)
-                        )
-                        
-                        # Wait for Veo rendering
-                        while not operation.done:
-                            st.write("⏳ Render in progress on Google Server... polling...")
-                            time.sleep(15)
-                            operation = client.operations.get(operation)
-                            
-                        st.success("✓ Google Veo completed rendering!")
-                        generated_video = operation.response.generated_videos[0]
-                        
-                        # Download raw generated video
-                        st.info("Downloading raw video from Google AI Studio...")
-                        client.files.download(file=generated_video.video)
-                        temp_veo_path = "temp_veo.mp4"
-                        generated_video.video.save(temp_veo_path)
-                        
-                        # Load generated video, add audio track & subtitle
-                        video_clip = VideoFileClip(temp_veo_path).with_duration(total_duration)
-                        audio_tracks = [voice_clip.with_volume_scaled(1.0)]
-                        
-                        final_clip = video_clip.with_audio(CompositeAudioClip(audio_tracks))
-                        final_clip.write_videofile(output_path, fps=24, codec="libx264", audio=True)
-                        
-                        video_clip.close()
-                        final_clip.close()
-
+                output_path = "output_viral_video.mp4"
+                final_clip.write_videofile(output_path, fps=24, codec="libx264", audio=True)
+                
+                for c in clips: c.close()
                 voice_clip.close()
+                final_clip.close()
 
                 # ----------------------------------------------------------
                 # 4. DISPLAY THE OUTPUTS IN APP
