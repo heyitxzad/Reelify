@@ -7,7 +7,7 @@ import traceback
 from PIL import Image, ImageDraw, ImageFont
 from gtts import gTTS
 from google import genai
-from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
+from moviepy import ImageClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
 
 # ----------------------------------------------------------
 # 1. STREAMLIT APP LAYOUT & DESIGNS
@@ -98,7 +98,6 @@ if st.button("🚀 Generate Viral Short-Form Video"):
                 # 1. Clean and save uploaded files to a temporary directory
                 temp_dir = "temp_assets"
                 os.makedirs(temp_dir, exist_ok=True)
-                # Remove any existing files in temporary folder
                 for file in os.listdir(temp_dir):
                     os.remove(os.path.join(temp_dir, file))
                 
@@ -111,21 +110,19 @@ if st.button("🚀 Generate Viral Short-Form Video"):
                 saved_assets.sort()
 
                 # 2. Call Gemini for Script & styling package
-                # Fallback template if key is missing
                 if not gemini_key:
                     pkg = {
                         "script": ["Looking for a game-changer?", f"This {product_input} upgrades your routine instantly.", "Get yours today! Link in bio!"],
                         "voiceover_text": f"If you are looking for the absolute best {product_input}, you need to stop scrolling. Grab yours now at the link in bio.",
                         "captions": f"Upgrade your lifestyle with {product_input}! Link in bio.",
                         "hashtags": "#musthave #viralproduct #affiliate",
-                        "styling": {"text_color": "yellow", "text_style": "tiktok_stroke", "music_genre": "lofi", "transition_effect": "crossfade"}
+                        "styling": {"text_color": "yellow", "text_style": "tiktok_stroke", "music_genre": "lofi", "transition_effect": "none"}
                     }
                 else:
                     client = genai.Client(api_key=gemini_key)
                     prompt = f'Create a viral vertical video marketing package for: "{product_input}". Output raw JSON only.'
                     response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
                     text = response.text.strip()
-                    # Strip formatting codeblocks
                     if text.startswith("```json"): text = text[7:]
                     elif text.startswith("```"): text = text[3:]
                     if text.endswith("```"): text = text[:-3]
@@ -137,7 +134,8 @@ if st.button("🚀 Generate Viral Short-Form Video"):
                 tts.save(voice_path)
 
                 # 4. Compile Video Scenes
-                total_duration = AudioFileClip(voice_path).duration
+                voice_clip = AudioFileClip(voice_path)
+                total_duration = voice_clip.duration
                 scene_duration = total_duration / len(saved_assets)
                 
                 clips = []
@@ -150,33 +148,33 @@ if st.button("🚀 Generate Viral Short-Form Video"):
                     sub_text = pkg["script"][sub_idx]
                     
                     processed_img = draw_smart_text(asset_path, sub_text, pkg["styling"])
-                    clip = ImageClip(np.array(processed_img)).set_duration(scene_duration)
-                    if pkg["styling"].get("transition_effect") == "crossfade":
-                        clip = clip.crossfadein(0.2).crossfadeout(0.2)
+                    # MoviePy v2.x: .with_duration()
+                    clip = ImageClip(np.array(processed_img)).with_duration(scene_duration)
                     clips.append(clip)
 
-                final_clip = concatenate_videoclips(clips, method="compose", padding=-0.2)
+                # MoviePy v2.x: clean concatenate
+                final_clip = concatenate_videoclips(clips, method="compose")
                 
-                # Add audio track
-                audio_tracks = [AudioFileClip(voice_path).volumex(1.0)]
-                final_clip = final_clip.set_audio(CompositeAudioClip(audio_tracks))
+                # Mix audio tracks
+                # MoviePy v2.x: .with_volume_scaled()
+                audio_tracks = [voice_clip.with_volume_scaled(1.0)]
+                # MoviePy v2.x: .with_audio()
+                final_clip = final_clip.with_audio(CompositeAudioClip(audio_tracks))
 
                 output_path = "output_viral_video.mp4"
                 final_clip.write_videofile(output_path, fps=24, codec="libx264", audio=True)
                 
                 # Close files to free memory
                 for c in clips: c.close()
+                voice_clip.close()
                 final_clip.close()
 
                 # ----------------------------------------------------------
                 # 4. DISPLAY THE OUTPUTS IN APP
                 # ----------------------------------------------------------
                 st.success("🎉 Video Successfully Compiled!")
-                
-                # Display Video Player
                 st.video(output_path)
                 
-                # Download Button for the MP4 file
                 with open(output_path, "rb") as file:
                     st.download_button(
                         label="💾 Download Video File",
@@ -185,7 +183,6 @@ if st.button("🚀 Generate Viral Short-Form Video"):
                         mime="video/mp4"
                     )
                 
-                # Display Social Captions
                 st.subheader("📝 Proposed Social Caption & Hashtags")
                 st.code(f"{pkg['captions']}\n\n{pkg['hashtags']}")
 
