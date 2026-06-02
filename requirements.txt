@@ -1,6 +1,6 @@
 streamlit
 google-genai
-gTTS
+edge-tts
 moviepy
 pillow
 numpy
